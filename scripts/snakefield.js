@@ -6,31 +6,46 @@
  *	The javascript file holding mechanics for WebGL game Snake Field.
  * 
  * 	Global notes:
- * 		All coordinates are given as [Y, X].
- * 		The field begins with [0,0] coordinate in the UPPER LEFT corner.		
+ * 		All coordinates are given as [Y,X]. This is to make for loops more clear (coords tend
+ * 			to get mixed up in them).
+ * 		The field begins with [0,0] coordinate in the UPPER LEFT corner. Again, because of
+ * 			for loops & printouts.
  * 
  * 		Direction index:
  * 		+---0---+	This is used for snake and player movement directions. With words:
  * 		|	↑	|	
  * 		3 ←	  → 1	0 = UP, 1 = RIGHT, 2 = DOWN, 3 = LEFT.
- * 		|	↓	|
+ * 		|	↓	|	-1 = EMPTY
  * 		+---2---+
- * 		
  * 
+ * 		The array "snakes" holds the current actual positions of snakes. The problem with having a
+ * 			single field and using it for navigation is that snakes plan their moves ahead and if we
+ * 			want to stick to only using numbers from 0 to 3 for directional indices we have no way
+ * 			of telling a field that a snake plans to move on from a field that a snake has already
+ * 			moved on. Therefore, the "snakes" array holds information about occupation of fields.
  */
 
 // Global variables	--------------------------------------------------------------------------------
-var canvas;					// canvas reference
-var gl = null;				// gl context
+var container;				// div holding 3D renderer
+var contWidth = 600;		// container width
+var contHeight = 600;		// container height
+
+var scene;					// scene object				
+var camera;					// camera object
+var renderer;				// renderer
 
 var level = 0;				// current game level
 var entities = [];			// array of snakes (& player at position 0)
 var height = 20;			// field height
 var width = 20;				// field width
-var ground;					// field above ground - holds snake positions etc.
-var underground;			// field below ground - holds positions of snakes digging underground
+var ground;					// field above ground - data for moving snakes around.
+var snakes;					// field mask for snakes - each field holds 0 if empty and 1 if a snake is on it.
 
-var snakePrediction = 3;	// represents the number of turns that snakes plan in advance.
+var snakePrediction = 4;	// represents the number of turns that snakes plan in advance. It can set down
+							//	turn arrows for one cell less than this number (so it doesn't turn and
+							//	smack its face into a wall).
+
+var cube;	// a handy cube for testing
 
 
 // init()	----------------------------------------------------------------------------------------
@@ -38,49 +53,119 @@ var snakePrediction = 3;	// represents the number of turns that snakes plan in a
 // Start the whole thing up. Runs on body load.
 
 function init() {
-	// ::: 3D PART :::
-	
-	// Grab canvas reference
-	canvas = document.getElementById("glcanvas");
-	// Initialize the GL context
-	gl = canvas.getContext("webgl") || canvas.getContext("experimental-webgl");
-	
-	// Check if we have working WebGL
-	if (!gl) {
-		alert("Unable to initialize WebGL. Your browser may not support it.");
-	} else {
-		gl.clearColor(0.0, 0.0, 0.0, 1.0);						// Canvas to black
-		gl.clearDepth(1.0);                                     // Clear everything
-		gl.enable(gl.DEPTH_TEST);                               // Enable depth testing
-		gl.depthFunc(gl.LEQUAL);                                // Near things obscure far things
-		gl.clear(gl.COLOR_BUFFER_BIT|gl.DEPTH_BUFFER_BIT);      // Clear the color as well as the depth buffer.
-	}
+	// ::: 3D PART ::: ---------------------------
 	
 	
+	// Grab container reference
+	container = document.getElementById('container');
 	
-	// ::: LOGICS PART ::::
+	// create scene
+	scene = new THREE.Scene();
 	
-	// ˇ FIELD ˇ
+	// set up camera
+	camera = new THREE.PerspectiveCamera(45, contWidth / contHeight, 0.1, 150.0);
+	camera.position.set(5, 5, 12);
+	camera.lookAt(5,5,0);
+	scene.add(camera);
 	
-	// create "ground" and "underground" arrays and initialise them to all zeros
+	// set up ambient light
+	var ambient = new THREE.AmbientLight( 0x444444 );
+	scene.add( ambient );
+	
+	//set up directional light
+	var directionalLight = new THREE.DirectionalLight( 0xffffff );
+	directionalLight.position.set(0, 0, 1);
+	scene.add(directionalLight);
+	
+	// Check for WebGL and create appropriate renderer
+	if (webglAvailable())
+		renderer = new THREE.WebGLRenderer( {antialias:true} );
+	else
+		renderer = new THREE.CanvasRenderer();
+	
+	// set renderer size so it fits into container
+	renderer.setSize(contWidth, contHeight);
+	// attach renderer to the container div
+	container.appendChild(renderer.domElement);
+	
+	
+	// add a test cube
+	var geometry = new THREE.BoxGeometry( 1, 1, 1 );
+	var material = new THREE.MeshBasicMaterial( { color: 0x00ff00 } );
+	cube = new THREE.Mesh( geometry, material );
+	scene.add( cube );
+	cube.position.set(5,5,4);
+	
+	// instantiate a loader
+	var loader = new THREE.OBJMTLLoader();
+
+	// load field
+	loader.load(
+		'assets/field.obj', 'assets/field.mtl',
+		function (field) {	// Function when both resources are loaded
+			field.rotation.x = Math.PI/2;
+			field.position.set(5,5,0);
+			scene.add(field);
+		},
+		function ( xhr ) {	// Function called when downloads progress
+			console.log( (xhr.loaded / xhr.total * 100) + '% loaded' );
+		},
+		function ( xhr ) {	// Function called when downloads error
+			console.log( 'An error happened' );
+		}
+	);
+	
+	// call the render function
+	render();
+	
+	
+	// ::: LOGICS PART :::: ----------------------
+	
+	// create "ground" and "snakes" arrays and initialise them to all empty.
 	ground = new Array(height);
-	underground = new Array(height);
+	snakes = new Array(height);
 	for (var i = 0; i < height; i++) {
 		ground[i] = new Array(width);
-		underground[i] = new Array(width);
+		snakes[i] = new Array(width);
 		for (var j = 0; j < width; j++) {
-			ground[i][j] = 0;
-			underground[i][j] = 0;
+			ground[i][j] = -1;
+			snakes[i][j] = 0;
 		}
 	}
-	
-	
-	// ˇ ENTITY ARRAY ˇ
 	
 	// put player entity in 1st spot of entity array
 	entities.push("player");	//TODO: make an actual player object
 	entities.push(makeSnake());	//	The first snake.
 }
+
+
+/* webglAvailable()	-----
+ * 
+ * Check for WebGL support.
+ */
+function webglAvailable() {
+	try {
+		var canvas = document.createElement( 'canvas' );
+		return !!(window.WebGLRenderingContext && (	canvas.getContext('webgl') ||
+													canvas.getContext('experimental-webgl')));
+	} catch (e) {
+		return false;
+	}
+}
+
+/* render()	----------------------------------------------------------------------------------------
+ * 
+ * Render a frame.
+ */
+function render() {
+	requestAnimationFrame(render);
+	
+	// rotate the test cube
+	cube.rotation.x += 0.1;
+	cube.rotation.y += 0.1;
+	
+	renderer.render(scene, camera);
+};
 
 /* makeSnake()	------------------------------------------------------------------------------------
  *
@@ -89,65 +174,106 @@ function init() {
  *	Arguments:	to be decided, all properties could be randomized
  * 	Returns:	a new snake object holding all properties of a new snake for the entities array.
  * 	Other:
- * 		Snake types: 0=normal, (TODO: add more)
+ * 
  */
  
 function makeSnake() {
-	var snPos = getFreePos();			// Decide the starting position on which snake will begin as [y,x].
+	var snPos = getPos();				// Decide the starting position on which snake will begin as [y,x].
+	var snLength = 5;					// TODO: calculate snake length based on level and type + randomisation
+	var snArray = genField(5);			// Generate a new underground spawn array on which the snake is located.
+										// snArray POINTS TO REGULAR FIELD WHEN THE SNAKE MOVES ONTO IT (unburrows).
 	var snDir = Math.floor(Math.random()*4);	// Set the snake's movement direction (direction index in global notes)
-	var snType = 0;						//TODO: decide snake type based on current game level
-	var snLength = 5;					//TODO: calculate snake length based on level and type + randomisation
-	var snDelay = getDelay();			// Grab delay needed before snake's next move is calculated.
-	var snHead = genModels(snLength, snDir);	//TODO: Pointer to snake's model - specifically its head (which points to the next part, etc).
+	var snDelay = getDelay();					// Grab delay needed before snake's next move is calculated.
+	var snHead = genModels(snLength, snDir);	// TODO: Pointer to snake's model - specifically its head (which points to the next part, etc).
 												// ANIMATION FUNCTION ACCESSES THE MODEL THROUGH THIS POINTER.
 	
 	var snake = {
 		pos:snPos,
 		dir:snDir,
-		type:snType,
 		length:snLength,
 		delay:snDelay,
 		head:snHead,
-		planned:0				//how many turns the snake has planned in advance. unless this == snakePrediction
+		planned:0				// how many turns the snake has planned in advance. unless this == snakePrediction
 		};						//	the snake won't move yet - it will plan its moves first.
 	
 	return snake;
 }
 
-/*	getFreePos() -----																												TODO!!!
+/*	getPos()																												TODO!!!
  * 
- *		Returns: a free position in the underground array. Used for spawning new snakes.
+ *		Returns: a random position in the underground array. Used for spawning new snakes.
  */
  
-function getFreePos() {
-	return [0,0]; 
+function getPos() {
+	return [0,0];
 }
  
  
+/* genField()
+ * 
+ * Generates a new field that holds a snake as it spawns underground or when it's burrowing there.
+ * 
+ * 		Returns: An empty array as long as the snake.
+ * 					
+ */
+
+function genField() {
+	var field = new Array(height);
+	for (var i = 0; i < height; i++) {
+		field[i] = new Array(width);
+		for (var j = 0; j < width; j++) {
+			field[i][j] = -1;
+		}
+	}
+	
+	return field;
+}
+
 
 /* getDelay()	------------------------------------------------------------------------------------								TODO!!!
  * 
  * Figures out for how long a snake needs to be delayed before its next move is calculated.
  * 
- *	Returns:	A number representing time until snake's next move calculation in seconds.
+ *	Returns:	A number representing time until snake's next move calculation in miliseconds.
  */
 
 function getDelay() {
-	return 1;
+	return 1000;
 }
 
 
 /* genModels()	------------------------------------------------------------------------------------								TODO!!!
  * 
- * generates the actual 3D model for the given snake. If the tail would fall out of the field at
- * any point just twist it in any possible direction by 90°.
+ * Generates the actual 3D models (and their meta objects) for the given snake.
  * 
  * 	Arguments:	length - the length of the snake to be generated
- * 				dir - the direction that the snake is facing
+ * 				dir - the direction that the snake is facing. Represented by direction index. This
+ * 						argument changes to equal direction argument of a field cell ONCE IT LEAVES
+ * 						IT. This is crucial because the diffecences of field and snake indices are
+ * 						used for animation of movement on field.
+ * 				field - pointer to the field that the snake is currently on
+ * 
  * 	Returns:	reference to an object that holds the details of snake's head. Details include
  * 				the actual 3D model, texture, 
  */
 
-function genModels(length, dir) {
+function genModels(length, dir, field) {
+	
+	
 	return null;
 }
+
+/* genPiece()	----
+ *
+ * Creates a meta object for a model as well as the actual 3D model for a snake piece. Meta
+ * object holds the piece's position (on logical field AND its copy of mvMatrix), pointer to the
+ * field it's on, the direction it's moving in and of course the actual 3D model.
+ */
+ 
+function genPiece() {
+	
+}
+
+/* move()	----------------------------------------------------------------------------------------
+ * 
+ */
