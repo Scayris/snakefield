@@ -46,7 +46,7 @@ var snakePrediction = 4;	// represents the number of turns that snakes plan in a
 							//	smack its face into a wall).
 
 var cube;	// a handy cube for testing
-
+var head, tail, dummy;
 
 // init()	----------------------------------------------------------------------------------------
 //
@@ -64,7 +64,7 @@ function init() {
 	
 	// set up camera
 	camera = new THREE.PerspectiveCamera(45, contWidth / contHeight, 0.1, 150.0);
-	camera.position.set(5, 5, 12);
+	camera.position.set(5,5,13.5);
 	camera.lookAt(5,5,0);
 	scene.add(camera);
 	
@@ -74,7 +74,7 @@ function init() {
 	
 	//set up directional light
 	var directionalLight = new THREE.DirectionalLight( 0xffffff );
-	directionalLight.position.set(0, 0, 1);
+	directionalLight.position.set(0, 0.5, 1);
 	scene.add(directionalLight);
 	
 	// Check for WebGL and create appropriate renderer
@@ -94,7 +94,7 @@ function init() {
 	var material = new THREE.MeshBasicMaterial( { color: 0x00ff00 } );
 	cube = new THREE.Mesh( geometry, material );
 	scene.add( cube );
-	cube.position.set(5,5,4);
+	cube.position.set(5,8,4);
 	
 	// instantiate a loader
 	var loader = new THREE.OBJMTLLoader();
@@ -105,6 +105,7 @@ function init() {
 		function (field) {	// Function when both resources are loaded
 			field.rotation.x = Math.PI/2;
 			field.position.set(5,5,0);
+			field.scale.set(1.1,1.1,1.1);
 			scene.add(field);
 		},
 		function ( xhr ) {	// Function called when downloads progress
@@ -114,6 +115,98 @@ function init() {
 			console.log( 'An error happened' );
 		}
 	);
+	
+	
+	
+	// load snake head
+	loader.load(
+		'assets/snake_head.obj', 'assets/snake_head.mtl',
+		function (head_ld) {	// Function when both resources are loaded
+			head_ld.name = ("head");
+			head_ld.rotation.x = Math.PI/2;
+			head_ld.position.set(0,0,0.5);
+			head = head_ld;
+			head.scale.set(1,0.8,0.8);
+			scene.add(head);
+			
+			dummy = new THREE.Object3D();
+			dummy.position.set(0.4,5,0);
+			dummy.add(head);
+			scene.add(dummy);
+		},
+		function ( xhr ) {	// Function called when downloads progress
+			console.log( (xhr.loaded / xhr.total * 100) + '% loaded' );
+		},
+		function ( xhr ) {	// Function called when downloads error
+			console.log( 'An error happened' );
+		}
+	);
+	
+	//head = scene.getObjectByName("head");
+	
+	// load snake body
+	loader.load(
+		'assets/snake_body.obj', 'assets/snake_body.mtl',
+		function (body) {	// Function when both resources are loaded
+			body.rotation.x = Math.PI/2;
+			body.rotation.y = Math.PI/2;
+			body.position.set(0.5,5,0.5);
+			body.scale.set(0.8,0.8,1);
+			//scene.add(body);
+			
+			var bodies = [];
+			
+			
+			for (var i = 0; i < 21; i++) {
+				bodies.push(body.clone());
+				bodies[i].position.set(0.4+(i+1)*0.4,5,0.5);
+				scene.add(bodies[i]);
+			}
+		},
+		function ( xhr ) {	// Function called when downloads progress
+			console.log( (xhr.loaded / xhr.total * 100) + '% loaded' );
+		},
+		function ( xhr ) {	// Function called when downloads error
+			console.log( 'An error happened' );
+		}
+	);
+	
+	// load snake tail
+	loader.load(
+		'assets/snake_tail.obj', 'assets/snake_tail.mtl',
+		function (tail) {	// Function when both resources are loaded
+			tail.name = "tail";
+			tail.rotation.y = -Math.PI/2;
+			tail.position.set(0.4+22*0.4,5,0.5);
+			tail.scale.set(0.8,0.8,1);
+			scene.add(tail);
+		},
+		function ( xhr ) {	// Function called when downloads progress
+			console.log( (xhr.loaded / xhr.total * 100) + '% loaded' );
+		},
+		function ( xhr ) {	// Function called when downloads error
+			console.log( 'An error happened' );
+		}
+	);
+	
+	// load arrow
+	loader.load(
+		'assets/arrow.obj', 'assets/arrow.mtl',
+		function (arrow) {	// Function when both resources are loaded
+			arrow.name = "arrow";
+			arrow.rotation.x = Math.PI/2;
+			arrow.position.set(3,3,0.5);
+			arrow.scale.set(0.5,0.5,0.5);
+			scene.add(arrow);
+		},
+		function ( xhr ) {	// Function called when downloads progress
+			console.log( (xhr.loaded / xhr.total * 100) + '% loaded' );
+		},
+		function ( xhr ) {	// Function called when downloads error
+			console.log( 'An error happened' );
+		}
+	);
+	
 	
 	// call the render function
 	render();
@@ -163,6 +256,14 @@ function render() {
 	// rotate the test cube
 	cube.rotation.x += 0.1;
 	cube.rotation.y += 0.1;
+	
+	if(tail) {
+		tail.rotation.z += 0.1;
+	}
+	
+	if(head) {
+		//head.rotation.x += 0.01;
+	}
 	
 	renderer.render(scene, camera);
 };
