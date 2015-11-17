@@ -1,3 +1,25 @@
 body {
 	margin: 0;
 }
+
+.controls {
+	position: absolute;
+    top: 0px;
+    left: 600px;
+	
+	width:200px;
+	height:580px;
+	padding:10px;
+	
+	
+	background-color:#000000;
+	color:#dddddd;
+	
+	text-align:center;
+	font-family: "Courier New", Courier, monospace;
+}
+
+.holder {
+	height:50px;
+	font-size:20px;
+}

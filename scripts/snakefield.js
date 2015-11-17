@@ -56,23 +56,41 @@ var snakeDistanceRelative = 0.4;		// distance between snake pieces relative to m
 var snakeDistance = modelScale * snakeDistanceRelative;	// distance between snake pieces. 
 
 var playerLoaded = false;	// tells if player object is loaded & added into entities array
+var playerDelay = 500;		// delay between player moves in miliseconds
+var playerStun = 3000;		// how long the player is stunned if he runs into a snake or wall
 
 var head, tail, dummy;		// model holders for original snake models
+var rabbit;					// model holder for player character
 var arrow;					// model holder for arrow
 
 var loaded = 0;				// counts loaded models
+var renderID;				// holds a reference to requestAnimationFrame. Kill it with cancelAnimationFrame() on game over.
+var gameStartTime;			// the time that game started
 
-var cube;	// a handy cube for testing
+var DEAD = false;			// doesn't get more self explainatory than this.
+
+var cube;					// a handy cube for testing
+
+//HTML elements
+
+var levelDiv;
+var scoreDiv;
+var positionDiv;
+
 
 // init()	========================================================================================
 //
 // Start the whole thing up. Runs on body load.
 
 function init() {
+	levelDiv = document.getElementById("level");
+	scoreDiv = document.getElementById("score");
+	positionDiv = document.getElementById("position");
+	
 	// ::: 3D PART ::: -----------------------------------------------------------------------------
 	
 	// Grab container reference
-	container = document.getElementById('container');
+	container = document.getElementById("container");
 	
 	// create scene
 	scene = new THREE.Scene();
@@ -123,7 +141,23 @@ function init() {
 			ground.rotation.x = Math.PI/2;
 			ground.position.set(5,5,0);
 			ground.scale.set(1.1,1.1,1.1);
-			//scene.add(ground);
+			scene.add(ground);
+			loaded++;
+		},
+		function ( xhr ) {	console.log( (xhr.loaded / xhr.total * 100) + '% loaded' );	},	//DL progress
+		function ( xhr ) {	console.log( 'An error happened' );								//error
+		}
+	);
+	
+	// load rabbit
+	loader.load(
+		'assets/rabbit.obj', 'assets/rabbit.mtl',
+		function (rabbit_ld) {	// Function when both resources are loaded
+			rabbit_ld.scale.set(0.4*modelScale,0.4*modelScale,0.4*modelScale);
+			rabbit_ld.rotation.set(Math.PI/2,0,Math.PI/2,"ZYX");
+			rabbit_ld.position.set(0,0,0);
+			rabbit = new THREE.Object3D();
+			rabbit.add(rabbit_ld);
 			loaded++;
 		},
 		function ( xhr ) {	console.log( (xhr.loaded / xhr.total * 100) + '% loaded' );	},	//DL progress
@@ -211,6 +245,9 @@ function init() {
 		}
 	}
 	
+	var dateObj = new Date();
+	gameStartTime = dateObj.getTime();
+	
 	// call the render function
 	render();
 }
@@ -235,8 +272,8 @@ function webglAvailable() {
  * Render a frame.
  */
 function render() {
-	requestAnimationFrame(render);
-	if (loaded === 5) {
+	renderID = requestAnimationFrame(render);
+	if (loaded === 6) {
 		// rotate the test cube
 		//cube.rotation.x += 0.1;
 		//cube.rotation.y += 0.1;
@@ -252,6 +289,7 @@ function render() {
 		var currentTime = dateObj.getTime();
 		if (currentTime > nextLevelTime) {
 			level++;
+			levelDiv.innerHTML = level;
 			levelup = true;
 		}
 		
@@ -275,17 +313,40 @@ function render() {
 
 /* initPlayer()
  * 
- * initiates the player object and returns it to be added to entity array
+ * initiates the player object and returns it to be added to entity array.
+ * 
+ * Player object itself rotates by itself, but is moved around by its mover.
  */
 function initPlayer() {
+	//add keydown event listener
+	window.addEventListener("keydown", keyHandler);
+	
 	var posYX = Math.floor(size/2);
+	
+	var plMod = rabbit.clone();
+	var plMoveHelper = new THREE.Object3D();
+	plMoveHelper.add(plMod);
+	scene.add(plMoveHelper);
+	
+	var dateObj = new Date();
+	var currentTime = dateObj.getTime();
+	var nMoveTime = currentTime + playerDelay;
+	
 	var player = {
 		pos:[posYX, posYX],
 		dir:2,
-		model:null																						// --------- TODO: add player model! --------
-	}
+		nextDir:2,
+		model:plMod,
+		mover:plMoveHelper,
+		lastMoveTime:currentTime,
+		nextMoveTime:nMoveTime,
+		stunned:false
+	};
 	
-	// TODO - add player to scene
+	player.model.rotation.set(0,0,Math.PI/2,"ZYX");
+	player.model.position.set(halfCell,halfCell,halfCell);
+	
+	player.mover.position.set(player.pos[1]*cellSize, player.pos[0]*cellSize, 0);
 	
 	return player;
 }
@@ -316,7 +377,111 @@ function snakesToGen() {
  * Sort out the player's move in each render iteration.
  */
 function playerHandler() {
+	var player = entities[0];
 	
+	var dateObj = new Date();
+	var currentTime = dateObj.getTime();
+	
+	// update score
+	scoreDiv.innerHTML = currentTime - gameStartTime;
+	
+	if (snakes[player.pos[0]][player.pos[1]] === 2) {		///========== GAME OVER ==========///
+		DEAD = true;	//just note it down and finish moving so he actually runs into the snake
+	}
+	
+	if (currentTime > player.nextMoveTime) {	//player cellchange
+		if(DEAD) {
+			camera.rotation.set(Math.PI,0,0,"ZYX");
+			cancelAnimationFrame(renderID);
+			if(window.confirm("GAME OVER. Play again?")) {
+				window.location.reload(false);
+			}
+		}
+		
+		player.stunned = false;
+		
+		var exceededTime = currentTime - player.nextMoveTime;
+		player.percentMoved = exceededTime / playerDelay;
+		player.lastMoveTime = currentTime;
+		player.nextMoveTime = currentTime + playerDelay - exceededTime;
+		
+		player.dir = player.nextDir;
+		var relPos = getDir(player.dir);
+		
+		if (player.pos[0]+relPos[0] < 0 || player.pos[0]+relPos[0] >= size ||	//check if the player ran into a wall...
+			player.pos[1]+relPos[1] < 0 || player.pos[1]+relPos[1] >= size ||
+			snakes[player.pos[0]+relPos[0]][player.pos[1]+relPos[1]] === 1) {	//...or a snake.
+			
+			player.stunned = true;
+			player.nextMoveTime = currentTime + playerStun;
+			
+			switch (player.dir) {
+			case 0: player.model.rotation.set(0, 0, Math.PI/2, "ZYX");
+					break;
+			case 1: player.model.rotation.set(0, 0, 0, "ZYX");
+					break;
+			case 2: player.model.rotation.set(0, 0, -Math.PI/2, "ZYX");
+					break;
+			case 3: player.model.rotation.set(0, 0, Math.PI, "ZYX");
+					break;
+			}
+			
+			player.dir = (player.dir + 2)%4;
+			player.nextDir = player.dir;
+			
+			return false;
+		}
+		
+		// move player on logical array
+		player.pos[0] += relPos[0]; player.pos[1] += relPos[1];
+		
+		// turn player to face the direction that he's moving in
+		switch (player.nextDir) {
+			case 0: player.model.rotation.set(0, 0, -Math.PI/2, "ZYX");
+					break;
+			case 1: player.model.rotation.set(0, 0, Math.PI, "ZYX");
+					break;
+			case 2: player.model.rotation.set(0, 0, Math.PI/2, "ZYX");
+					break;
+			case 3: player.model.rotation.set(0, 0, 0, "ZYX");
+					break;
+		}
+		positionDiv.innerHTML = "X: "+player.pos[1]+" Y :"+player.pos[0];
+	} else {
+		player.percentMoved = (currentTime - player.lastMoveTime) / (player.nextMoveTime - player.lastMoveTime);
+	}
+	
+	if (player.stunned) { return false; }	//ignore player move if stunned
+	
+	switch (player.dir)	{
+		case 0: player.mover.position.set(player.pos[1]*cellSize, (player.pos[0]-1+player.percentMoved)*cellSize, 0);
+				break;
+		case 1:	player.mover.position.set((player.pos[1]-1+player.percentMoved)*cellSize, player.pos[0]*cellSize, 0);
+				break;
+		case 2:	player.mover.position.set(player.pos[1]*cellSize, (player.pos[0]+1-player.percentMoved)*cellSize, 0);
+				break;
+		case 3:	player.mover.position.set((player.pos[1]+1-player.percentMoved)*cellSize, player.pos[0]*cellSize, 0);
+				break;
+	}
+}
+
+/* keyHandler()	------------------------------------------------------------------------------------
+ * 
+ * Handles keydown events such as player movement.
+ */
+function keyHandler(keyEvent) {
+	var player = entities[0];
+	
+	switch (keyEvent.keyCode) {
+		case 38:	player.nextDir = 0;	//UP
+					break;
+		case 39:	player.nextDir = 1;	//RIGHT
+					break;
+		case 40:	player.nextDir = 2;	//DOWN
+					break;
+		case 37:	player.nextDir = 3;	//LEFT
+					break;
+	}
 }
 
 /* snakeHandler()	--------------------------------------------------------------------------------
@@ -475,22 +640,29 @@ function planMove(snake, planPos) {
 	//decide where to move, try if possible and move
 	var decider = Math.random();
 	var forwardClear = tryMove(planPos, plannedMove);
+	var leftClear = tryMove(planPos, leftMove);
+	var rightClear = tryMove(planPos, rightMove);
 	if (!forwardClear || decider > 0.9) {	//turn if not possible to go forward or randomly
 		decider = Math.random();
-		if (decider < 0.5 && tryMove(planPos, leftMove)) {	//try to move left
+		if (decider < 0.5 && leftClear) {				//try to move left
 			field[planPos[0]][planPos[1]] = leftInd;	//set current field to left's direction index
 			placeArrow(snake, leftInd, planPos);		//place arrow
 			planPos = [planPos[0]+leftMove[0], planPos[1]+leftMove[1]];	//move current to left
 			field[planPos[0]][planPos[1]] = leftInd;	//place left's index on left field too
-		} else if (tryMove(planPos, rightMove)) {			//try to move right
+		} else if (rightClear) {						//try to move right
 			field[planPos[0]][planPos[1]] = rightInd;
 			placeArrow(snake, rightInd, planPos);
 			planPos = [planPos[0]+rightMove[0], planPos[1]+rightMove[1]];
 			field[planPos[0]][planPos[1]] = rightInd;
-		} else if (forwardClear) {							//try to move forward
+		} else if (leftClear) {							//try to move left again, in case it just wasn't chosen
+			field[planPos[0]][planPos[1]] = leftInd;
+			placeArrow(snake, leftInd, planPos);
+			planPos = [planPos[0]+leftMove[0], planPos[1]+leftMove[1]];
+			field[planPos[0]][planPos[1]] = leftInd;
+		} else if (forwardClear) {						//try to move forward again, in case it just wasn't chosen
 			planPos = [planPos[0]+plannedMove[0], planPos[1]+plannedMove[1]];
 			field[planPos[0]][planPos[1]] = index;
-		} else {											//burrow
+		} else {										//no moves possible, burrow
 			field[planPos[0]][planPos[1]] = 5;
 		}
 	} else {	//move forward
@@ -598,17 +770,24 @@ function move(model, snake) {
 		var exceededTime = currentTime - model.nextMoveTime;
 		model.percentMoved = exceededTime / delay;
 		model.lastMoveTime = currentTime;
-		model.nextMoveTime = currentTime + delay;
+		model.nextMoveTime = currentTime + delay - exceededTime;
 		
 		//get rid of possible turnHelper
 		if (model.turnHelper != null) {
 			model.turnHelper.remove(model);
 			scene.remove(model.turnHelper);
-			scene.add(model);				//model is added to scene, but not yet moved!
+			//scene.add(model);				//model is added to scene, but not yet moved!
 			model.turnHelper = null;
 		}
 		
 		if (model.burrowing === true) {		//model just fully burrowed. Mark it to be destroyed and move on.
+			/*if (model.next === null) {		//tail. Clean up the spot where the snake finished burrowing.
+				var relPos = getDir(field[model.pos[0]][model.pos[1]]);
+				model.pos[0] += relPos[0]; model.pos[1] += relPos[1];
+				snakes[model.pos[0]][model.pos[1]] = 0;
+				field[model.pos[0]][model.pos[1]] = -1;
+			}*/
+			
 			model.toDestroy = true;
 			return false;
 		}
@@ -626,7 +805,12 @@ function move(model, snake) {
 		var relPos = getDir(model.dir);
 		model.pos[0] += relPos[0]; model.pos[1] += relPos[1];
 		
-		snakes[model.pos[0]][model.pos[1]] = 1; // just set it every time
+		//set the field to occupied in snakes array
+		if (model === snake.head || model === snake.head.next) {	//first 2 kill the player.
+			snakes[model.pos[0]][model.pos[1]] = 2;
+		} else {
+			snakes[model.pos[0]][model.pos[1]] = 1; // just set it every time
+		}
 	} else {	//just update percentMoved
 		model.percentMoved = (currentTime - model.lastMoveTime) / (model.nextMoveTime - model.lastMoveTime);
 	}
@@ -649,6 +833,11 @@ function move(model, snake) {
  * Accepts the model.
  */
 function straightMove(model) {
+	if(!model.onScene) {
+		scene.add(model);
+		model.onScene = true;
+	}
+	
 	switch (model.dir) {
 		case 0: model.rotation.set(0, 0, -Math.PI/2, "ZYX");	//moving UP
 				model.position.set((model.pos[1]+0.5)*cellSize, (model.pos[0]+model.percentMoved)*cellSize, halfCell);
@@ -676,6 +865,9 @@ function turnMove(model, snake) {
 		if (model === snake.head.next) {
 			scene.remove(snake.dirPlates.shift());				//remove directional plate
 		}
+		
+		scene.remove(model);			// remove piece from scene
+		model.onScene = false;
 		
 		turnHelper = new THREE.Object3D();
 		model.turnHelper = turnHelper;
@@ -731,7 +923,6 @@ function turnMove(model, snake) {
 					} break;
 		}
 		
-		scene.remove(model);			// remove piece from scene
 		model.turnHelper.add(model);	// add piece to turn helper
 		scene.add(model.turnHelper);	// add turn helper to scene
 	}
@@ -758,7 +949,7 @@ function digUp(model, snake) {
 		var exceededTime = currentTime - model.nextMoveTime;
 		model.percentMoved = exceededTime / delay;
 		model.lastMoveTime = currentTime;
-		model.nextMoveTime = currentTime + delay;
+		model.nextMoveTime = currentTime + delay - exceededTime;
 		
 		//handle model position
 		if (model.pos === 0) {
@@ -777,7 +968,7 @@ function digUp(model, snake) {
 			
 			model.turnHelper.remove(model);
 			scene.remove(model.turnHelper);
-			scene.add(model);				//model is added to scene, but not yet moved!
+			//scene.add(model);				//model is added to scene, but not yet moved!
 			model.turnHelper = null;
 			
 			if (model.next === null) {		//this was the tail, clear surfacing point
@@ -833,6 +1024,7 @@ function digUp(model, snake) {
 			}
 			
 			scene.remove(model);
+			model.onScene = false;
 			model.turnHelper.add(model);
 			scene.add(model.turnHelper);
 		}
@@ -850,12 +1042,12 @@ function digUp(model, snake) {
 					break;
 		}
 	} else {					//move straight up
-		//model.position.z = -1 * (model.pos * cellSize) + (model.percentMoved * cellSize);
-		if (model.percentMoved - oldPercentMoved < 0) {
+		model.position.z = -1 * (model.pos * cellSize) + (model.percentMoved * cellSize);
+		/*if (model.percentMoved - oldPercentMoved < 0) {
 			model.position.z += model.percentMoved + (1 - oldPercentMoved);
 		} else {
 			model.position.z += model.percentMoved - oldPercentMoved;
-		}
+		}*/
 	}
 	
 	return newCell;
@@ -875,30 +1067,36 @@ function burrow(model) {
 	var currentTime = dateObj.getTime();
 	
 	if (model.turnHelper === null) {
+		scene.remove(model);
+		model.onScene = false;
+		
 		turnHelper = new THREE.Object3D();
 		model.turnHelper = turnHelper;
 		
 		switch(model.dir) {
-			case 0: model.turnHelper.position.set(
+			case 0: model.rotation.set(0, 0, -Math.PI/2, "ZYX");	//moving UP
+					model.turnHelper.position.set(
 						(model.pos[1]+0.5)*cellSize,
 						(model.pos[0])*cellSize, -halfCell);
 					break;
-			case 1: model.turnHelper.position.set(
+			case 1: model.rotation.set(0, 0, Math.PI, "ZYX");		//moving RIGHT
+					model.turnHelper.position.set(
 						(model.pos[1])*cellSize,
 						(model.pos[0]+0.5)*cellSize, -halfCell);
 					break;
-			case 2: model.turnHelper.position.set(
+			case 2: model.rotation.set(0, 0, Math.PI/2, "ZYX");		//moving DOWN
+					model.turnHelper.position.set(
 						(model.pos[1]+0.5)*cellSize,
 						(model.pos[0]+1)*cellSize, -halfCell);
 					break;
-			case 3: model.turnHelper.position.set(
+			case 3: model.rotation.set(0, 0, 0, "ZYX");				//moving LEFT
+					model.turnHelper.position.set(
 						(model.pos[1]+1)*cellSize,
 						(model.pos[0]+0.5)*cellSize, -halfCell);
 					break;
 		}
 		
 		model.position.set(0,0,cellSize);
-		scene.remove(model);
 		model.turnHelper.add(model);
 		scene.add(model.turnHelper);
 		
@@ -959,10 +1157,11 @@ function genModels(length, pos, dir, field) {
 	snakeHead.position.set((pos[1]+0.5)*cellSize, (pos[0]+0.5)*cellSize, posZ*cellSize);
 	posZ -= snakeDistanceRelative;
 	scene.add(snakeHead);
+	snakeHead.onScene = true;
 	
 	snakeHead.field = field;
 	snakeHead.dir = 6;
-	snakeHead.pos = 1+Math.floor(0.5+(i+1)*snakeDistanceRelative);	//position in 1D spawn array
+	snakeHead.pos = 0;				// position in 1D spawn array
 	snakeHead.spawnPos = pos;		// position that the model spawned at. Used for surfacing.
 	snakeHead.turnHelper = null;	// object used for turning snakes. Equals null if not mid-turn.
 	
@@ -970,7 +1169,7 @@ function genModels(length, pos, dir, field) {
 	var currentTime = dateObj.getTime();
 	snakeHead.percentMoved = 0;
 	snakeHead.lastMoveTime = currentTime;
-	snakeHead.nextMoveTime = currentTime+delay;
+	snakeHead.nextMoveTime = currentTime+delay*1.5;
 	
 	snakeHead.burrowing = false;
 	snakeHead.toDestroy = false;
@@ -984,6 +1183,7 @@ function genModels(length, pos, dir, field) {
 		tempPiece.position.set((pos[1]+0.5)*cellSize, (pos[0]+0.5)*cellSize, posZ*cellSize);
 		posZ -= snakeDistanceRelative;
 		scene.add(tempPiece);
+		tempPiece.onScene = true;
 		
 		tempPiece.field = field;
 		tempPiece.dir = 6;
@@ -995,7 +1195,7 @@ function genModels(length, pos, dir, field) {
 		currentTime = dateObj.getTime();
 		tempPiece.percentMoved = 0;
 		tempPiece.lastMoveTime = currentTime;
-		tempPiece.nextMoveTime = currentTime+delay;
+		tempPiece.nextMoveTime = currentTime+delay+(0.5+(i+1)*snakeDistanceRelative-tempPiece.pos)*delay;
 		
 		tempPiece.burrowing = false;
 		tempPiece.toDestroy = false;
@@ -1009,6 +1209,7 @@ function genModels(length, pos, dir, field) {
 	spawnRot(tempPiece, dir);
 	tempPiece.position.set((pos[1]+0.5)*cellSize, (pos[0]+0.5)*cellSize, posZ*cellSize);
 	scene.add(tempPiece);
+	tempPiece.onScene = true;
 	
 	tempPiece.field = field;
 	tempPiece.dir = 6;
@@ -1020,7 +1221,7 @@ function genModels(length, pos, dir, field) {
 	currentTime = dateObj.getTime();
 	tempPiece.percentMoved = 0;
 	tempPiece.lastMoveTime = currentTime;
-	tempPiece.nextMoveTime = currentTime+delay;
+	tempPiece.nextMoveTime = currentTime+delay+(0.5+(i+1)*snakeDistanceRelative-tempPiece.pos)*delay;
 	
 	tempPiece.burrowing = false;
 	tempPiece.toDestroy = false;
