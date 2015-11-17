@@ -13,9 +13,9 @@
  * 		Direction index:
  * 		+---0---+	This is used for snake and player movement directions. With words:
  * 		|	↑	|	
- * 		3 ←	  → 1	0 = UP, 1 = RIGHT, 2 = DOWN, 3 = LEFT.
+ * 		3 ←	  → 1	 0 = UP, 1 = RIGHT, 2 = DOWN, 3 = LEFT
  * 		|	↓	|	-1 = EMPTY
- * 		+---2---+	5 = BURROW, 6 = SURFACE
+ * 		+---2---+	 5 = BURROWING, 6 = SURFACING, 7 = COMPLETELY BURROWED
  * 
  * 		The array "snakes" holds the current actual positions of snakes. The problem with having a
  * 			single field and using it for navigation is that snakes plan their moves ahead and if we
@@ -35,17 +35,27 @@ var scene;					// scene object
 var camera;					// camera object
 var renderer;				// renderer
 
-var level = 0;						// current game level
-var entities = [];					// array of snakes (& player at position 0)
-var size = 20;						// logical field size
-var field;							// field above ground - data for moving snakes around.
-var snakes;							// field mask for snakes - each field holds 0 if empty and 1 if a snake is on it.
-var fieldSize = 10;					// physical field size
-var cellSize = fieldSize / size;	// physical size of a cell
-
+var entities = [];			// array of snakes (& player at position 0)
+var size = 20;				// logical field size
+var field;					// field above ground - data for moving snakes around.
+var snakes;					// field mask for snakes - each field holds 0 if empty and 1 if a snake is on it.
+var levelup = true;			// level just changed, spawn snakes.
+var level = 0;				// current game level
+var levelDuration = 3;		// level duration in seconds
+var nextLevelTime;			// the time of next levelup
 var snakePrediction = 4;	// represents the number of turns that snakes plan in advance. It can set down
 							//	turn arrows for one cell less than this number (so it doesn't turn and
 							//	smack its face into a wall).
+var maxSnakes = 15;			// maximum number of snakes to exist on field at any time
+
+var fieldSize = 10;						// physical field size
+var cellSize = fieldSize / size;		// physical size of a cell
+var halfCell = cellSize/2;				// just because it's often needed
+var modelScale = cellSize;				// scale models down by this amount so that they fit nicely
+var snakeDistanceRelative = 0.4;		// distance between snake pieces relative to model size. 0.35 = seamless, more 2 see movement
+var snakeDistance = modelScale * snakeDistanceRelative;	// distance between snake pieces. 
+
+var playerLoaded = false;	// tells if player object is loaded & added into entities array
 
 var head, tail, dummy;		// model holders for original snake models
 var arrow;					// model holder for arrow
@@ -68,7 +78,7 @@ function init() {
 	scene = new THREE.Scene();
 	
 	// set up camera
-	camera = new THREE.PerspectiveCamera(45, contWidth / contHeight, 0.1, 150.0);
+	camera = new THREE.PerspectiveCamera(45, contWidth / contHeight, 0.1, 200.0);
 	camera.position.set(5,5,13.5);
 	camera.lookAt(5,5,0);
 	scene.add(camera);
@@ -98,8 +108,8 @@ function init() {
 	var geometry = new THREE.BoxGeometry(1,1,1);
 	var material = new THREE.MeshBasicMaterial( { color: 0x00ff00 } );
 	cube = new THREE.Mesh( geometry, material );
-	scene.add( cube );
 	cube.position.set(5,8,4);
+	//scene.add( cube );
 	
 	// --- LOADERS ---------------------------------------------------------------------------------
 	
@@ -113,7 +123,7 @@ function init() {
 			ground.rotation.x = Math.PI/2;
 			ground.position.set(5,5,0);
 			ground.scale.set(1.1,1.1,1.1);
-			scene.add(ground);
+			//scene.add(ground);
 			loaded++;
 		},
 		function ( xhr ) {	console.log( (xhr.loaded / xhr.total * 100) + '% loaded' );	},	//DL progress
@@ -126,7 +136,8 @@ function init() {
 		'assets/snake_head.obj', 'assets/snake.mtl',
 		function (head_ld) {	// Function when both resources are loaded
 			head_ld.rotation.x = Math.PI/2;
-			head_ld.scale.set(1,0.8,0.8);
+			head_ld.scale.set(modelScale,0.8*modelScale,0.8*modelScale);
+			head_ld.position.set(0,0,0);
 			head = new THREE.Object3D();
 			head.add(head_ld);
 			//scene.add(head);
@@ -142,7 +153,8 @@ function init() {
 		'assets/snake_body.obj', 'assets/snake.mtl',
 		function (body_ld) {
 			body_ld.rotation.y = Math.PI/2;
-			body_ld.scale.set(0.8,0.8,1);
+			body_ld.scale.set(0.8*modelScale,0.8*modelScale,modelScale);//*1.2);
+			body_ld.position.set(0,0,0);
 			body = new THREE.Object3D();
 			body.add(body_ld);
 			//scene.add(body);
@@ -157,7 +169,8 @@ function init() {
 	loader.load(
 		'assets/snake_tail.obj', 'assets/snake.mtl',
 		function (tail_ld) {
-			tail_ld.scale.set(0.8,0.8,1);
+			tail_ld.scale.set(modelScale,0.8*modelScale,0.8*modelScale);
+			tail_ld.position.set(0,0,0);
 			tail = new THREE.Object3D();
 			tail.add(tail_ld);
 			loaded++;
@@ -172,7 +185,8 @@ function init() {
 		'assets/arrow.obj', 'assets/arrow.mtl',
 		function (arrow_ld) {	// Function when both resources are loaded
 			arrow_ld.rotation.x = Math.PI/2;
-			arrow_ld.scale.set(0.5,0.5,0.5);
+			arrow_ld.scale.set(0.5*modelScale,0.5*modelScale,0.5*modelScale);
+			arrow_ld.position.set(0,0,0);
 			arrow = new THREE.Object3D();
 			arrow.add(arrow_ld);
 			//scene.add(arrow);
@@ -196,10 +210,6 @@ function init() {
 			snakes[i][j] = 0;
 		}
 	}
-	
-	// put player entity in 1st spot of entity array
-	entities.push(initPlayer());		//	player object
-	entities.push(makeSnake());			//	The first snake.
 	
 	// call the render function
 	render();
@@ -228,8 +238,37 @@ function render() {
 	requestAnimationFrame(render);
 	if (loaded === 5) {
 		// rotate the test cube
-		cube.rotation.x += 0.1;
-		cube.rotation.y += 0.1;
+		//cube.rotation.x += 0.1;
+		//cube.rotation.y += 0.1;
+		
+		//load the player & push him into 1st spot of entity array if needed
+		if (!playerLoaded) {
+			entities.push(initPlayer());		//	player object
+			playerLoaded = true;
+		}
+		
+		// check for a levelup
+		var dateObj = new Date();
+		var currentTime = dateObj.getTime();
+		if (currentTime > nextLevelTime) {
+			level++;
+			levelup = true;
+		}
+		
+		// handle a levelup (or start of the game)
+		if (levelup) {
+			for (var i = 0; i < snakesToGen(); i++) {
+				entities.push(makeSnake(0));
+			}
+			nextLevelTime = currentTime + levelDuration * 1000;
+			levelup = false;
+		}
+		
+		// handle player and snake turns
+		playerHandler();
+		for (var i = 1; i < entities.length; i++) {
+			snakeHandler(i);
+		}
 	}
 	renderer.render(scene, camera);
 };
@@ -242,9 +281,73 @@ function initPlayer() {
 	var posYX = Math.floor(size/2);
 	var player = {
 		pos:[posYX, posYX],
-		dir:2
+		dir:2,
+		model:null																						// --------- TODO: add player model! --------
 	}
+	
+	// TODO - add player to scene
+	
 	return player;
+}
+
+/* snakesToGen();
+ * 
+ * Decide how many snakes to generate on level change.
+ */
+function snakesToGen() {
+	if (level === 0) { return 1; }
+	
+	var numPicker = Math.random();
+	
+	if (entities.length-1 < maxSnakes) {
+		if (level < 5) {
+			if (numPicker < 0.3) { return 0; }
+			else { return 1; }
+		} else {
+			if (numPicker < 0.1) { return 0; }
+			else if (numPicker > 0.8 && entities.length-1 < maxSnakes-1) { return 2; }	//return 2 only if we have space for 2
+			else { return 1; }
+		}
+	}
+}
+
+/* playerHandler()	--------------------------------------------------------------------------------
+ * 
+ * Sort out the player's move in each render iteration.
+ */
+function playerHandler() {
+	
+}
+
+/* snakeHandler()	--------------------------------------------------------------------------------
+ * 
+ * Sort out the snake's move in each render iteration.
+ * 
+ * Accepts snake's index in entities array.
+ */
+function snakeHandler(index) {
+	var snake = entities[index];
+	
+	var piece = snake.head;
+	var planNext = move(piece, snake);
+	piece = piece.next;
+	
+	while (piece.next != null) {
+		move(piece, snake);
+		piece = piece.next;
+	}
+	move(piece, snake);
+	
+	if (planNext) {
+		snake.pos = planMove(snake, snake.pos);
+	}
+	
+	if (piece.toDestory === true) {	//the entire snake moved underground - destroy it and spawn a new one
+		var length = snake.length;
+		piece = null;
+		
+		entities[index] = makeSnake(length);
+	}
 }
 
 
@@ -262,25 +365,28 @@ function makeSnake(len) {
 		var snLength = len;
 	} else {
 		var snLength = 5 + Math.floor(Math.random()*20);
-	}	
+	}
 	var snArray = genField(5);							// Generate a new underground spawn array on which the snake is located.
-														// snArray POINTS TO REGULAR FIELD WHEN THE SNAKE FULLY MOVES ONTO IT (unburrows).
-	var snDelay = getDelay();							// Grab delay needed before snake's next move is calculated.
-	var snPos = posPlan.slice(0,1);						// Decide the starting position on which snake will begin as [y,x].
+	var snPos = posPlan.slice(0,2);						// Decide the starting position on which snake will begin as [y,x].
 	var snDir = posPlan[2];								// Set the snake's movement direction (direction index in global notes)
-	var snHead = genModels(snLength, snDir);			// TODO: Pointer to snake's model - specifically its head (which points to the next part, etc).
-														// ANIMATION FUNCTION ACCESSES THE MODEL THROUGH THIS POINTER.
+	var snHead = genModels(snLength, snPos, snDir, snArray);	// Pointer to snake's model - specifically its head (which points to the next part, etc).
+																// ANIMATION FUNCTION ACCESSES THE MODEL THROUGH THIS REFERENCE.
 	var dPlates = [];									// a QUEUE (meaning USE dirPlates.shift() NOT POP) holding snake turn arrows
 	
 	var snake = {
 		pos:snPos,
 		dir:snDir,
 		length:snLength,
-		delay:snDelay,
 		head:snHead,
-		planned:0,				// how many turns the snake has planned in advance. unless this == snakePrediction
+		planned:2,				// how many turns the snake has planned in advance. unless this == snakePrediction
 		dirPlates:dPlates		//	the snake won't move yet - it will plan its moves first.
 		};
+	
+	//placeArrow(snake, snDir, snPos);
+	while (snake.planned < 4) {
+		snake.pos = planMove(snake, snake.pos);
+		snake.planned++;
+	}
 	
 	return snake;
 }
@@ -296,27 +402,23 @@ function getPos() {
 	var clear = false;
 	var x, y, dir, tempDir;
 	while (!clear) {
-		clear = true;
 		y = Math.floor(Math.random()*(size)); if (y===size) {y = size-1;}
 		x = Math.floor(Math.random()*(size)); if (x===size) {x = size-1;}
 		dir = Math.floor(Math.random()*4);		if (dir>3)	{dir = 3;}
 		tempDir = getDir(dir);
 		
 		if (field[y][x] != -1) {		//check chosen position
-			clear = false;
+			continue;
 		} else {
-			if (field[y+tempDir[0]][x+tempDir[1]] != -1) {	//check next cell
-				clear = false;
-				for (var i = 1; i < 4; i++) {				//next cell taken, check other 3 directions
-					tempDir = getDir((dir+i)%4);
-					if (y+tempDir[0] < 0 || y+tempDir[0] === size || x+tempDir[1] < 0 || x+tempDir[1] === size) {
-						continue;	//continue if next cell would fall out of field
-					}
-					if (field[y+tempDir[0]][x+tempDir[1]] == -1) {
-						dir = (dir+i)%4;
-						clear = true;
-						break;
-					}
+			for (var i = 0; i < 4; i++) {	// check next cell
+				tempDir = getDir((dir+i)%4);
+				if (y+tempDir[0] < 0 || y+tempDir[0] === size || x+tempDir[1] < 0 || x+tempDir[1] === size) {
+					continue;	//continue if next cell would fall out of field
+				}
+				if (field[y+tempDir[0]][x+tempDir[1]] == -1) {
+					dir = (dir+i)%4;
+					clear = true;
+					break;
 				}
 			}
 		}
@@ -332,13 +434,14 @@ function getPos() {
  * 
  * Generates a new field that holds a snake as it spawns underground or when it's burrowing there.
  * 
+ * Accepts:	Snake's length and direction (5 -> burrowing, 6 -> surfacing) to fill the array with.
  * Returns: An empty array as long as the snake + 1.
  * 					
  */
 
-function genField(snakeLen) {
+function genField(snakeLen, direction) {
 	var field = new Array(snakeLen+1);
-	for (var i = 0; i < snakeLen+1; i++) { field[i] = -1;	}
+	for (var i = 0; i < snakeLen+1; i++) { field[i] = direction; }
 	return field;
 }
 
@@ -352,8 +455,11 @@ function genField(snakeLen) {
  * Plans a snake's future move and marks it down on the field. Also places an arrow if needed
  * 
  * Accepts: snake object and planner position as [y,x]
+ * Returns: new planner position
  */
 function planMove(snake, planPos) {
+	if (field[planPos[0]][planPos[1]] === 5) { return planPos; }	//no need to plan if burrowing
+	
 	//indices
 	var index = field[planPos[0]][planPos[1]];
 	var leftInd = index - 1;
@@ -374,26 +480,29 @@ function planMove(snake, planPos) {
 		if (decider < 0.5 && tryMove(planPos, leftMove)) {	//try to move left
 			field[planPos[0]][planPos[1]] = leftInd;	//set current field to left's direction index
 			placeArrow(snake, leftInd, planPos);		//place arrow
-			planPos = field[planPos[0]+leftMove[0]][planPos[1]+leftMove[1]];	//move current to left
+			planPos = [planPos[0]+leftMove[0], planPos[1]+leftMove[1]];	//move current to left
 			field[planPos[0]][planPos[1]] = leftInd;	//place left's index on left field too
 		} else if (tryMove(planPos, rightMove)) {			//try to move right
 			field[planPos[0]][planPos[1]] = rightInd;
 			placeArrow(snake, rightInd, planPos);
-			planPos = field[planPos[0]+rightMove[0]][planPos[1]+rightMove[1]];
+			planPos = [planPos[0]+rightMove[0], planPos[1]+rightMove[1]];
 			field[planPos[0]][planPos[1]] = rightInd;
 		} else if (forwardClear) {							//try to move forward
-			placeArrow(snake, index, planPos);
-			planPos = field[planPos[0]+plannedMove[0]][planPos[1]+plannedMove[1]];
+			planPos = [planPos[0]+plannedMove[0], planPos[1]+plannedMove[1]];
 			field[planPos[0]][planPos[1]] = index;
 		} else {											//burrow
-																																// --------- TODO ----------
+			field[planPos[0]][planPos[1]] = 5;
 		}
+	} else {	//move forward
+		planPos = [planPos[0]+plannedMove[0], planPos[1]+plannedMove[1]];
+		field[planPos[0]][planPos[1]] = index;
 	}
+	return(planPos);
 }
 function tryMove(planPos, plannedMove) {	//check if a given move is possible
-	planPos[0]+plannedMove[0] >= 0 && planPos[0]+plannedMove[0] < size &&
+	return (planPos[0]+plannedMove[0] >= 0 && planPos[0]+plannedMove[0] < size &&
 	planPos[1]+plannedMove[1] >= 0 && planPos[1]+plannedMove[1] < size &&
-	field[planPos[0]+plannedMove[0]][planPos[1]+plannedMove[1]] == -1
+	field[planPos[0]+plannedMove[0]][planPos[1]+plannedMove[1]] === -1);
 }
 function placeArrow(snake, dir, pos) {		//place an arrow on field and add it to snake's dirPlates queue
 	var newArr = arrow.clone();
@@ -406,11 +515,11 @@ function placeArrow(snake, dir, pos) {		//place an arrow on field and add it to 
 				break;
 		case 3: break;
 	}
-	newArr.position.set(pos[1]*cellSize+0.5,pos[0]*cellSize+0.5,0.1);
+	newArr.position.set((pos[1]+0.5)*cellSize,(pos[0]+0.5)*cellSize,0.1);
 						//^ 1 FIRST, 0 SECOND! Logical=[y,x], physical=[x,y]!!!
 	
 	snake.dirPlates.push(newArr);
-	field.add(snake.dirPlates[snake.dirPlates.length-1]);
+	scene.add(snake.dirPlates[snake.dirPlates.length-1]);
 }
 
 /* getDir()
@@ -436,13 +545,13 @@ function getDir(index) {
  */
 function rotateFor(dirS, dirE, percent) {
 	var rotDir;
-	if (dirS < dirE || (dirS === 3 && dirE === 0)) {
+	if (dirS === dirE-1 || (dirS === 3 && dirE === 0)) {
 		rotDir = -1;
 	} else {
 		rotDir = 1;
 	}
 	
-	return ((Math.PI/2) * percent)
+	return (rotDir * (Math.PI/2) * percent)
 }
 
 
@@ -465,6 +574,352 @@ function spawnRot(model, dir) {
 	}
 }
 
+/* move() ==========================================================================================
+ * 
+ * Moves the accepted piece of snake forward by a portion of the field. Portion is calculated from delays.
+ * Also handles turning and erasing arrows.
+ * 
+ * Accepts the model that needs to be moved.
+ * Returns true if the piece was moved onto a new cell, false otherwise.
+ */
+function move(model, snake) {
+	if (model.dir === 6) { return digUp(model, snake); }	// if the snake is still surfacing let digUp handle it.
+	if (model.toDestroy === true) { return false; }	// no need to move these. Just return false and move on.
+	
+	var newCell = false;
+	var dateObj = new Date();
+	var currentTime = dateObj.getTime();
+	
+	if (currentTime >= model.nextMoveTime) {	// check if enough time has passed for snake to move to next cell
+		newCell = true;
+		
+		//handle time change
+		var delay = getDelay();
+		var exceededTime = currentTime - model.nextMoveTime;
+		model.percentMoved = exceededTime / delay;
+		model.lastMoveTime = currentTime;
+		model.nextMoveTime = currentTime + delay;
+		
+		//get rid of possible turnHelper
+		if (model.turnHelper != null) {
+			model.turnHelper.remove(model);
+			scene.remove(model.turnHelper);
+			scene.add(model);				//model is added to scene, but not yet moved!
+			model.turnHelper = null;
+		}
+		
+		if (model.burrowing === true) {		//model just fully burrowed. Mark it to be destroyed and move on.
+			model.toDestroy = true;
+			return false;
+		}
+		
+		//handle model's direction index
+		model.dir = field[model.pos[0]][model.pos[1]];
+		
+		if (model.next === null) {	// tail. Remove 1 from snakes array & clean up field.
+			snakes[model.pos[0]][model.pos[1]] = 0;
+			field[model.pos[0]][model.pos[1]] = -1;
+		}
+		
+		//change model's position
+		//console.log("modelDir: "+model.dir);
+		var relPos = getDir(model.dir);
+		model.pos[0] += relPos[0]; model.pos[1] += relPos[1];
+		
+		snakes[model.pos[0]][model.pos[1]] = 1; // just set it every time
+	} else {	//just update percentMoved
+		model.percentMoved = (currentTime - model.lastMoveTime) / (model.nextMoveTime - model.lastMoveTime);
+	}
+	
+	if (field[model.pos[0]][model.pos[1]] === model.dir) {	//indices on model and field match -> moving straight
+		straightMove(model);
+	} else if (field[model.pos[0]][model.pos[1]] === 5) {	//field index === 5 -> burrowing
+		burrow(model);
+	} else {												//indices on model and field don't match -> turning
+		turnMove(model, snake);
+	}
+	
+	return newCell;
+}
+
+/* straightMove()	------------------------------
+ * 
+ * Moves a model in a straight line according to its position, direction and percentMoved.
+ * 
+ * Accepts the model.
+ */
+function straightMove(model) {
+	switch (model.dir) {
+		case 0: model.rotation.set(0, 0, -Math.PI/2, "ZYX");	//moving UP
+				model.position.set((model.pos[1]+0.5)*cellSize, (model.pos[0]+model.percentMoved)*cellSize, halfCell);
+				break;
+		case 1: model.rotation.set(0, 0, Math.PI, "ZYX");		//moving RIGHT
+				model.position.set((model.pos[1]+model.percentMoved)*cellSize, (model.pos[0]+0.5)*cellSize, halfCell);
+				break;
+		case 2: model.rotation.set(0, 0, Math.PI/2, "ZYX");		//moving DOWN
+				model.position.set((model.pos[1]+0.5)*cellSize, (model.pos[0]+1-model.percentMoved)*cellSize, halfCell);
+				break;
+		case 3: model.rotation.set(0, 0, 0, "ZYX");				//moving LEFT
+				model.position.set((model.pos[1]+1-model.percentMoved)*cellSize, (model.pos[0]+0.5)*cellSize, halfCell);
+				break;
+	}
+}
+
+/* turnMove()	----------------------------------
+ * 
+ * Moves a model around a corner according to its position, direction and percentMoved.
+ * 
+ * Accepts the model.
+ */
+function turnMove(model, snake) {
+	if (model.turnHelper === null) {
+		if (model === snake.head.next) {
+			scene.remove(snake.dirPlates.shift());				//remove directional plate
+		}
+		
+		turnHelper = new THREE.Object3D();
+		model.turnHelper = turnHelper;
+		
+		switch (model.dir) {
+			case 0: model.rotation.set(0, 0, -Math.PI/2, "ZYX");	//moving UP
+					if (field[model.pos[0]][model.pos[1]] === 3) {	//turn LEFT
+						model.position.set( halfCell, 0, halfCell);
+						model.turnHelper.position.set(
+							(model.pos[1])*cellSize,
+							(model.pos[0])*cellSize, 0);
+					} else {										//turn RIGHT
+						model.position.set(-halfCell, 0, halfCell);
+						model.turnHelper.position.set(
+							(model.pos[1]+1)*cellSize,
+							(model.pos[0])*cellSize, 0);
+					} break;
+			case 1: model.rotation.set(0, 0, Math.PI, "ZYX");		//moving RIGHT
+					if (field[model.pos[0]][model.pos[1]] === 0) {	//turn LEFT
+						model.position.set(0, -halfCell, halfCell);
+						model.turnHelper.position.set(
+							(model.pos[1])*cellSize,
+							(model.pos[0]+1)*cellSize, 0);
+					} else {										//turn RIGHT
+						model.position.set(0,  halfCell, halfCell);
+						model.turnHelper.position.set(
+							(model.pos[1])*cellSize,
+							(model.pos[0])*cellSize, 0);
+					} break;
+			case 2: model.rotation.set(0, 0, Math.PI/2, "ZYX");		//moving DOWN
+					if (field[model.pos[0]][model.pos[1]] === 1) {	//turn LEFT
+						model.position.set(-halfCell, 0, halfCell);
+						model.turnHelper.position.set(
+							(model.pos[1]+1)*cellSize,
+							(model.pos[0]+1)*cellSize, 0);
+					} else {										//turn RIGHT
+						model.position.set( halfCell, 0, halfCell);
+						model.turnHelper.position.set(
+							(model.pos[1])*cellSize,
+							(model.pos[0]+1)*cellSize, 0);
+					} break;
+			case 3: model.rotation.set(0, 0, 0, "ZYX");				//moving LEFT
+					if (field[model.pos[0]][model.pos[1]] === 2) {	//turn LEFT
+						model.position.set(0,  halfCell, halfCell);
+						model.turnHelper.position.set(
+							(model.pos[1]+1)*cellSize,
+							(model.pos[0])*cellSize, 0);
+					} else {										//turn RIGHT
+						model.position.set(0, -halfCell, halfCell);
+						model.turnHelper.position.set(
+							(model.pos[1]+1)*cellSize,
+							(model.pos[0]+1)*cellSize, 0);
+					} break;
+		}
+		
+		scene.remove(model);			// remove piece from scene
+		model.turnHelper.add(model);	// add piece to turn helper
+		scene.add(model.turnHelper);	// add turn helper to scene
+	}
+	
+	model.turnHelper.rotation.set(0, 0, rotateFor(model.dir, field[model.pos[0]][model.pos[1]], model.percentMoved), "ZYX");
+}
+
+/* digUp() ---------------------------------------
+ * 
+ * Move for surfacing.
+ */
+function digUp(model, snake) {
+	newCell = false;
+	
+	var dateObj = new Date();
+	var currentTime = dateObj.getTime();
+	var oldPercentMoved = model.percentMoved;
+	
+	if (currentTime >= model.nextMoveTime) {	//move to next cell
+		newCell = true;
+		
+		//handle time change
+		var delay = getDelay();
+		var exceededTime = currentTime - model.nextMoveTime;
+		model.percentMoved = exceededTime / delay;
+		model.lastMoveTime = currentTime;
+		model.nextMoveTime = currentTime + delay;
+		
+		//handle model position
+		if (model.pos === 0) {
+			if (model === snake.head.next) {
+				scene.remove(snake.dirPlates.shift());				//remove directional plate
+			}
+			
+			model.dir = field[model.spawnPos[0]][model.spawnPos[1]];			// set dir to be the same as field where it surfaces
+			
+			var tempPos = getDir(model.dir);
+			model.pos = [model.spawnPos[0]+tempPos[0], model.spawnPos[1]+tempPos[1]];
+			
+			snakes[model.pos[0]][model.pos[1]] = 1;								// mark next field as taken
+			
+			model.field = field;
+			
+			model.turnHelper.remove(model);
+			scene.remove(model.turnHelper);
+			scene.add(model);				//model is added to scene, but not yet moved!
+			model.turnHelper = null;
+			
+			if (model.next === null) {		//this was the tail, clear surfacing point
+				snakes[model.spawnPos[0]][model.spawnPos[1]] = 0;
+				field[model.spawnPos[0]][model.spawnPos[1]] = -1;
+			}
+			
+			if (field[model.pos[0]][model.pos[1]] === model.dir) {	//moving straight
+				straightMove(model);
+				return newCell;
+			} else if (field[model.pos[0]][model.pos[1]] === 5) {	//burrowing
+				burrow(model);																				//--- TODO - burrowing - same as normal move
+				return newCell;
+			} else {												//turning
+				turnMove(model, snake);
+				return newCell;
+			}
+		} else {
+			model.pos--;
+		}
+	} else {	//just update percentMoved
+		model.percentMoved = (currentTime - model.lastMoveTime) / (model.nextMoveTime - model.lastMoveTime);
+	}
+	
+	if (model.pos === 0) {		//turn upwards
+		snakes[model.spawnPos[0]][model.spawnPos[1]] = 1;					// mark surfacing field as taken
+		
+		if (model.turnHelper === null) {
+			turnHelper = new THREE.Object3D();
+			model.turnHelper = turnHelper;
+			
+			switch(field[model.spawnPos[0]][model.spawnPos[1]]) {
+				case 0:	model.turnHelper.position.set(	// moving UP
+							(model.spawnPos[1]+0.5)*cellSize,
+							(model.spawnPos[0]+1)*cellSize, -halfCell);
+						model.position.set(0,-cellSize,0);
+						break;
+				case 1:	model.turnHelper.position.set(	// moving RIGHT
+							(model.spawnPos[1]+1)*cellSize,
+							(model.spawnPos[0]+0.5)*cellSize, -halfCell);
+						model.position.set(-cellSize,0,0);
+						break;
+				case 2:	model.turnHelper.position.set(	// moving LEFT
+							(model.spawnPos[1]+0.5)*cellSize,
+							(model.spawnPos[0])*cellSize, -halfCell);
+						model.position.set(0,cellSize,0);
+						break;
+				case 3:	model.turnHelper.position.set(	// moving DOWN
+							(model.spawnPos[1])*cellSize,
+							(model.spawnPos[0]+0.5)*cellSize, -halfCell);
+						model.position.set(cellSize,0,0);
+						break;
+			}
+			
+			scene.remove(model);
+			model.turnHelper.add(model);
+			scene.add(model.turnHelper);
+		}
+		
+		var rotAmount = model.percentMoved * Math.PI/2;
+		
+		switch(field[model.spawnPos[0]][model.spawnPos[1]]) {
+			case 0:	model.turnHelper.rotation.set(-rotAmount, 0, 0, "ZYX");
+					break;
+			case 1:	model.turnHelper.rotation.set(0, rotAmount, 0, "ZYX");
+					break;
+			case 2:	model.turnHelper.rotation.set(rotAmount, 0, 0, "ZYX");
+					break;
+			case 3:	model.turnHelper.rotation.set(0, -rotAmount, 0, "ZYX");
+					break;
+		}
+	} else {					//move straight up
+		//model.position.z = -1 * (model.pos * cellSize) + (model.percentMoved * cellSize);
+		if (model.percentMoved - oldPercentMoved < 0) {
+			model.position.z += model.percentMoved + (1 - oldPercentMoved);
+		} else {
+			model.position.z += model.percentMoved - oldPercentMoved;
+		}
+	}
+	
+	return newCell;
+}
+
+/* burrow()	--------------------------------------
+ * 
+ * Move downwards a cell.
+ * 
+ * Set a piece's "burrowing" property to true so that once it burrows for more than 1 cell its
+ *	"toDestroy" property is se to true as well in move() method. Afterwards it is no longer
+ * 	considered for moves and as soon as tail reaches "toDestroy" = true status snakeHandler()
+ * 	destroys the snake and spawns a new one.
+ */
+function burrow(model) {
+	var dateObj = new Date();
+	var currentTime = dateObj.getTime();
+	
+	if (model.turnHelper === null) {
+		turnHelper = new THREE.Object3D();
+		model.turnHelper = turnHelper;
+		
+		switch(model.dir) {
+			case 0: model.turnHelper.position.set(
+						(model.pos[1]+0.5)*cellSize,
+						(model.pos[0])*cellSize, -halfCell);
+					break;
+			case 1: model.turnHelper.position.set(
+						(model.pos[1])*cellSize,
+						(model.pos[0]+0.5)*cellSize, -halfCell);
+					break;
+			case 2: model.turnHelper.position.set(
+						(model.pos[1]+0.5)*cellSize,
+						(model.pos[0]+1)*cellSize, -halfCell);
+					break;
+			case 3: model.turnHelper.position.set(
+						(model.pos[1]+1)*cellSize,
+						(model.pos[0]+0.5)*cellSize, -halfCell);
+					break;
+		}
+		
+		model.position.set(0,0,cellSize);
+		scene.remove(model);
+		model.turnHelper.add(model);
+		scene.add(model.turnHelper);
+		
+		model.burrowing = true;
+	}
+	
+	var rotAmount = model.percentMoved * Math.PI/2;
+	
+	switch(model.dir) {
+		case 0:	turnHelper.rotation.set(-rotAmount, 0, 0, "ZYX");
+				break;
+		case 1:	turnHelper.rotation.set(0, rotAmount, 0, "ZYX");
+				break;
+		case 2:	turnHelper.rotation.set(rotAmount, 0, 0, "ZYX");
+				break;
+		case 3:	turnHelper.rotation.set(0, -rotAmount, 0, "ZYX");
+				break;
+	}
+}
+
+
 /* getDelay()	====================================================================================
  * 
  * Figures out for how long a snake needs to be delayed before its next move is calculated.
@@ -476,7 +931,7 @@ function getDelay() {
 }
 
 
-/* genModels()	====================================================================================								TODO!!!
+/* genModels()	====================================================================================
  * 
  * Generates the actual 3D models (and their meta objects) for the given snake.
  * 
@@ -489,17 +944,92 @@ function getDelay() {
  * 
  * 	Returns:	snake's head (Object3D)
  */
-function genModels(length, dir, field) {
+function genModels(length, pos, dir, field) {
+	// Decide how many actual pieces to generate. This number includes head and tail.
+	var pieceCount = Math.floor((length - 0.5 - 0.3) / snakeDistanceRelative);
+					//^ 0.5 space before head, 0.3 so that tail isn't too far back into the next cell
+	var posZ = -1.5;
 	
+	//time delay
+	var delay = getDelay();
 	
-	return null;
-}
-
-/* genPiece()
- * 
- */
-function genPiece() {
+	//head
+	var snakeHead = head.clone();
+	spawnRot(snakeHead, dir);
+	snakeHead.position.set((pos[1]+0.5)*cellSize, (pos[0]+0.5)*cellSize, posZ*cellSize);
+	posZ -= snakeDistanceRelative;
+	scene.add(snakeHead);
 	
+	snakeHead.field = field;
+	snakeHead.dir = 6;
+	snakeHead.pos = 1+Math.floor(0.5+(i+1)*snakeDistanceRelative);	//position in 1D spawn array
+	snakeHead.spawnPos = pos;		// position that the model spawned at. Used for surfacing.
+	snakeHead.turnHelper = null;	// object used for turning snakes. Equals null if not mid-turn.
+	
+	var dateObj = new Date();
+	var currentTime = dateObj.getTime();
+	snakeHead.percentMoved = 0;
+	snakeHead.lastMoveTime = currentTime;
+	snakeHead.nextMoveTime = currentTime+delay;
+	
+	snakeHead.burrowing = false;
+	snakeHead.toDestroy = false;
+	
+	//body
+	var previous = snakeHead;
+	var tempPiece;
+	for (var i = 0; i < pieceCount-2; i++) {
+		tempPiece = body.clone();
+		spawnRot(tempPiece, dir);
+		tempPiece.position.set((pos[1]+0.5)*cellSize, (pos[0]+0.5)*cellSize, posZ*cellSize);
+		posZ -= snakeDistanceRelative;
+		scene.add(tempPiece);
+		
+		tempPiece.field = field;
+		tempPiece.dir = 6;
+		tempPiece.pos = 1+Math.floor(0.5+(i+1)*snakeDistanceRelative);	//position in 1D spawn array
+		tempPiece.spawnPos = pos;			// position that the model spawned at. Used for surfacing.
+		tempPiece.turnHelper = null;
+		
+		dateObj = new Date();
+		currentTime = dateObj.getTime();
+		tempPiece.percentMoved = 0;
+		tempPiece.lastMoveTime = currentTime;
+		tempPiece.nextMoveTime = currentTime+delay;
+		
+		tempPiece.burrowing = false;
+		tempPiece.toDestroy = false;
+		
+		previous.next = tempPiece;
+		previous = tempPiece;
+	}
+	
+	//tail
+	tempPiece = tail.clone();
+	spawnRot(tempPiece, dir);
+	tempPiece.position.set((pos[1]+0.5)*cellSize, (pos[0]+0.5)*cellSize, posZ*cellSize);
+	scene.add(tempPiece);
+	
+	tempPiece.field = field;
+	tempPiece.dir = 6;
+	tempPiece.pos = 1+Math.floor(0.5+(i+1)*snakeDistanceRelative);	//position in 1D spawn array
+	tempPiece.spawnPos = pos;			// position that the model spawned at. Used for surfacing.
+	tempPiece.turnHelper = null;
+	
+	dateObj = new Date();
+	currentTime = dateObj.getTime();
+	tempPiece.percentMoved = 0;
+	tempPiece.lastMoveTime = currentTime;
+	tempPiece.nextMoveTime = currentTime+delay;
+	
+	tempPiece.burrowing = false;
+	tempPiece.toDestroy = false;
+	
+	previous.next = tempPiece;
+	tempPiece.next = null;		//this allows for simple identification of tail
+	
+	//return head
+	return snakeHead;
 }
 
 
