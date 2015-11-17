@@ -507,11 +507,10 @@ function snakeHandler(index) {
 		snake.pos = planMove(snake, snake.pos);
 	}
 	
-	if (piece.toDestory === true) {	//the entire snake moved underground - destroy it and spawn a new one
+	if (piece.toDestroy) {	//the entire snake moved underground - destroy it and spawn a new one
 		var length = snake.length;
 		piece = null;
 		
-		console.log("make snake after burrow");
 		entities[index] = makeSnake(length);
 	}
 }
@@ -761,7 +760,7 @@ function spawnRot(model, dir) {
  */
 function move(model, snake) {
 	if (model.dir === 6) { return digUp(model, snake); }	// if the snake is still surfacing let digUp handle it.
-	if (model.toDestroy === true) { return false; }	// no need to move these. Just return false and move on.
+	if (model.toDestroy) { return false; }	// no need to move these. Just return false and move on.
 	
 	var newCell = false;
 	var dateObj = new Date();
