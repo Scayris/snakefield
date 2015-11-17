@@ -511,6 +511,7 @@ function snakeHandler(index) {
 		var length = snake.length;
 		piece = null;
 		
+		console.log("make snake after burrow");
 		entities[index] = makeSnake(length);
 	}
 }
@@ -531,7 +532,7 @@ function makeSnake(len) {
 	} else {
 		var snLength = 5 + Math.floor(Math.random()*20);
 	}
-	var snArray = genField(5);							// Generate a new underground spawn array on which the snake is located.
+	var snArray = genField(snLength,6);					// Generate a new underground spawn array on which the snake is located.
 	var snPos = posPlan.slice(0,2);						// Decide the starting position on which snake will begin as [y,x].
 	var snDir = posPlan[2];								// Set the snake's movement direction (direction index in global notes)
 	var snHead = genModels(snLength, snPos, snDir, snArray);	// Pointer to snake's model - specifically its head (which points to the next part, etc).
@@ -547,8 +548,12 @@ function makeSnake(len) {
 		dirPlates:dPlates		//	the snake won't move yet - it will plan its moves first.
 		};
 	
-	//placeArrow(snake, snDir, snPos);
-	while (snake.planned < 4) {
+	placeArrow(snake, snDir, snPos);
+	var tempDir = field[snake.pos[0]][snake.pos[1]];
+	tempPos = getDir(tempDir);
+	snake.pos[0] += tempPos[0]; snake.pos[1] += tempPos[1];
+	
+	while (snake.planned < snakePrediction) {
 		snake.pos = planMove(snake, snake.pos);
 		snake.planned++;
 	}
@@ -580,7 +585,7 @@ function getPos() {
 				if (y+tempDir[0] < 0 || y+tempDir[0] === size || x+tempDir[1] < 0 || x+tempDir[1] === size) {
 					continue;	//continue if next cell would fall out of field
 				}
-				if (field[y+tempDir[0]][x+tempDir[1]] == -1) {
+				if (field[y+tempDir[0]][x+tempDir[1]] === -1) {
 					dir = (dir+i)%4;
 					clear = true;
 					break;
@@ -953,8 +958,14 @@ function digUp(model, snake) {
 		
 		//handle model position
 		if (model.pos === 0) {
+			/*if (model === snake.head) {
+				console.log("Surfacing at X: "+model.spawnPos[1]+" Y: "+model.spawnPos[0]);
+				printField(field);
+				printField(snakes);
+			}*/
+			
 			if (model === snake.head.next) {
-				scene.remove(snake.dirPlates.shift());				//remove directional plate
+				scene.remove(snake.dirPlates.shift());		//remove directional plate
 			}
 			
 			model.dir = field[model.spawnPos[0]][model.spawnPos[1]];			// set dir to be the same as field where it surfaces
@@ -962,7 +973,11 @@ function digUp(model, snake) {
 			var tempPos = getDir(model.dir);
 			model.pos = [model.spawnPos[0]+tempPos[0], model.spawnPos[1]+tempPos[1]];
 			
-			snakes[model.pos[0]][model.pos[1]] = 1;								// mark next field as taken
+			if (model === snake.head || model === snake.head.next) {
+				snakes[model.pos[0]][model.pos[1]] = 2;							// step here and be eaten
+			} else {
+				snakes[model.pos[0]][model.pos[1]] = 1;							// mark next field as taken
+			}
 			
 			model.field = field;
 			
@@ -994,7 +1009,7 @@ function digUp(model, snake) {
 	}
 	
 	if (model.pos === 0) {		//turn upwards
-		snakes[model.spawnPos[0]][model.spawnPos[1]] = 1;					// mark surfacing field as taken
+		snakes[model.spawnPos[0]][model.spawnPos[1]] = 1;	// mark surfacing field as taken (yes even for head, it's mean to get people eaten from below)
 		
 		if (model.turnHelper === null) {
 			turnHelper = new THREE.Object3D();
@@ -1043,11 +1058,6 @@ function digUp(model, snake) {
 		}
 	} else {					//move straight up
 		model.position.z = -1 * (model.pos * cellSize) + (model.percentMoved * cellSize);
-		/*if (model.percentMoved - oldPercentMoved < 0) {
-			model.position.z += model.percentMoved + (1 - oldPercentMoved);
-		} else {
-			model.position.z += model.percentMoved - oldPercentMoved;
-		}*/
 	}
 	
 	return newCell;
@@ -1067,6 +1077,9 @@ function burrow(model) {
 	var currentTime = dateObj.getTime();
 	
 	if (model.turnHelper === null) {
+		//console.log("burrowing at X: "+model.pos[1]+" Y: "+model.pos[0]);
+		//printField(field);
+		
 		scene.remove(model);
 		model.onScene = false;
 		
@@ -1162,7 +1175,9 @@ function genModels(length, pos, dir, field) {
 	snakeHead.field = field;
 	snakeHead.dir = 6;
 	snakeHead.pos = 0;				// position in 1D spawn array
-	snakeHead.spawnPos = pos;		// position that the model spawned at. Used for surfacing.
+	snakeHead.spawnPos = new Array();									// position that the model spawned at. Used for surfacing.
+	snakeHead.spawnPos.push(pos[0]); snakeHead.spawnPos.push(pos[1]);	// YES IT HAS TO BE THAT LONG. TOOK ME LIKE 6 HOURS TO FIGURE OUT...
+																		//	...THAT IT WAS COPYING THE REFERENCE - NOT VALUE. Damn better be sure.
 	snakeHead.turnHelper = null;	// object used for turning snakes. Equals null if not mid-turn.
 	
 	var dateObj = new Date();
@@ -1188,7 +1203,8 @@ function genModels(length, pos, dir, field) {
 		tempPiece.field = field;
 		tempPiece.dir = 6;
 		tempPiece.pos = 1+Math.floor(0.5+(i+1)*snakeDistanceRelative);	//position in 1D spawn array
-		tempPiece.spawnPos = pos;			// position that the model spawned at. Used for surfacing.
+		tempPiece.spawnPos = new Array();									// position that the model spawned at. Used for surfacing.
+		tempPiece.spawnPos.push(pos[0]); tempPiece.spawnPos.push(pos[1]);	// refer to above comment about length.
 		tempPiece.turnHelper = null;
 		
 		dateObj = new Date();
@@ -1214,7 +1230,8 @@ function genModels(length, pos, dir, field) {
 	tempPiece.field = field;
 	tempPiece.dir = 6;
 	tempPiece.pos = 1+Math.floor(0.5+(i+1)*snakeDistanceRelative);	//position in 1D spawn array
-	tempPiece.spawnPos = pos;			// position that the model spawned at. Used for surfacing.
+	tempPiece.spawnPos = new Array();									// position that the model spawned at. Used for surfacing.
+	tempPiece.spawnPos.push(pos[0]); tempPiece.spawnPos.push(pos[1]);	// refer to above comment about length.
 	tempPiece.turnHelper = null;
 	
 	dateObj = new Date();
@@ -1233,4 +1250,22 @@ function genModels(length, pos, dir, field) {
 	return snakeHead;
 }
 
+/* HELPERS	========================================================================================
+ * 
+ * Mostly used for debugging.
+ */
 
+function printField(field) {
+	var printout = "";
+	for (var i = field.length-1; i >= 0; i--) {
+		for (var j = 0; j < field[i].length; j++) {
+			if (field[i][j] < 0) {
+				printout += (" "+field[i][j]);
+			} else {
+				printout += ("  "+field[i][j]);
+			}
+		}
+		printout += "\n";
+	}
+	console.log(printout);
+}
