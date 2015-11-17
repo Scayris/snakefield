@@ -786,12 +786,10 @@ function move(model, snake) {
 		}
 		
 		if (model.burrowing === true) {		//model just fully burrowed. Mark it to be destroyed and move on.
-			/*if (model.next === null) {		//tail. Clean up the spot where the snake finished burrowing.
-				var relPos = getDir(field[model.pos[0]][model.pos[1]]);
-				model.pos[0] += relPos[0]; model.pos[1] += relPos[1];
+			if (model.next === null) {		//tail. Clean up the spot where the snake finished burrowing.
 				snakes[model.pos[0]][model.pos[1]] = 0;
 				field[model.pos[0]][model.pos[1]] = -1;
-			}*/
+			}
 			
 			model.toDestroy = true;
 			return false;
